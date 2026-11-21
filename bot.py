@@ -164,20 +164,11 @@ class Bot:
         if me['energy']<12:self.lightning_rest=True
         elif me['energy']>65:self.lightning_rest=False
         recovering=hp<.68 and nd>75
-        # Holding an already-safe position avoids broadcasting footsteps and
-        # converging on the highly contested circle centre.  Project inward
-        # only when the current position is outside the next safe envelope.
-        goal=p[:2]
-        from_next=distance(p,center)
-        if from_next>safe and from_next>0:
-            goal=[center[0]+(p[0]-center[0])*safe/from_next,
-                  center[1]+(p[1]-center[1])*safe/from_next]
-        # An uncontested supply drop is worth three cubes plus full health and
-        # energy. Start travelling when its landing time roughly matches ETA.
-        drops=[d for d in o['drops'] if d['lands_in']<max(8,distance(p,d['pos'])/max(1,stats.get('walk_speed',11.7))+3)
-               and distance(p,d['pos'])<145 and distance(d['pos'],center)<max(0,zr-10)
-               and not any(distance(e['pos'],d['pos'])<48 for e in enemies)]
-        if drops and not urgent and (hp<.95 or me['cubes']<8 or me['energy']<70):
+        goal=list(center)
+        # Health restoration from uncontested drops can outweigh combat loot.
+        drops=[d for d in o['drops'] if d['lands_in']<8 and distance(d['pos'],center)<max(0,zr-10)
+               and not any(distance(e['pos'],d['pos'])<40 for e in enemies)]
+        if drops and hp<.85 and not urgent:
             goal=min(drops,key=lambda d:distance(p,d['pos']))['pos'][:2]
         elif not urgent:
             loot=[]
@@ -218,7 +209,7 @@ class Bot:
             self.stuck=0.
         self.prev=p[:]
         speed=stats.get('walk_speed',11.7)
-        best=(-1e30,0.,0.)
+        best=(-1e30,0.,0.,False)
         for off in (0,.3,-.3,.65,-.65,1.,-1.,1.5,-1.5,2.,-2.,math.pi):
             a=base+off; vx,vy=math.cos(a),math.sin(a)
             q=[p[0]+vx*7,p[1]+vy*7,p[2]]
@@ -231,6 +222,7 @@ class Bot:
             for e in enemies:
                 ed=distance(q,e['pos'])
                 score-=max(0,(90 if hp<.65 else 40)-ed)*(.55 if hp<.65 else .3)
+            projectile_threat=False
             for bullet in o['projectiles']:
                 bp,bv=bullet['pos'],bullet['vel']
                 rx,ry=bp[0]-p[0],bp[1]-p[1]
@@ -240,11 +232,14 @@ class Bot:
                 miss=math.hypot(rx+ux*tau,ry+uy*tau)
                 if abs(bp[2]+bv[2]*tau-(p[2]+height*.5))<height*.7:
                     score-=max(0,radius+4-miss)*7
+                    if tau>0 and miss<radius+2:
+                        projectile_threat=True
             if score>best[0]:
-                best=(score,vx,vy)
+                best=(score,vx,vy,projectile_threat)
         disengaging=hp<.45 and nd<100 and me['energy']>40 and me['grounded'] and not self.lightning_rest
         closing=bool(lightning and not self.lightning_rest and hp>.55 and nd>lightning['stats'].get('range',45)+8 and nd<100 and me['energy']>60)
-        act={'tick':o['tick'],'move':[best[1],best[2]],'boost':bool((urgent and me['energy']>15) or disengaging or closing),
+        evasive=best[3] and me['energy']>30 and me['grounded']
+        act={'tick':o['tick'],'move':[best[1],best[2]],'boost':bool((urgent and me['energy']>15) or disengaging or closing or evasive),
              'jump':bool(self.stuck>.7 and me['grounded'] and me['energy']>35),
              'fire':[False,False]}
         if self.stuck>.8 and not me['grounded'] and me['energy']>15:
