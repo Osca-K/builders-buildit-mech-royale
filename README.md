@@ -13,12 +13,12 @@ Local conformance passed 300/300 decisions within 50 ms; Linux sandbox and real
 match quality require separate verification. No match-performance claim is made.
 
 The current candidate starts from the original 4.23-point entry (b94d7c441285).
-Projectile avoidance now models acceleration from observed velocity, air control,
-current boost/laser movement speed, and mortar gravity. It minimizes clearance
-over continuous relative-motion segments so fast bullets crossing between ticks
-are considered. Six regressions include a fast bullet crossing between ticks
-and an impossible instantaneous reversal. Run `python -m unittest test_motion.py`.
-Loot arrival, upgrade choices and weapon targeting retain the original baseline.
+Obstacle-escape jumping and jetting now require intended horizontal travel.
+The previous horizontal-progress timer treated deliberate arrival as blockage,
+triggered a jump after0.8s of rest and then spent energy jetting upward.
+Four regressions distinguish deliberate rest from real blocked travel, both
+grounded and airborne. Run `python -m unittest test_stuck.py`.
+Loot arrival, projectile avoidance, upgrades and combat retain the original baseline.
 Upgrade selection tied at4.23; close-range mech target priority scored4.15;
 cylinder aiming and arrival distance each scored3.85. All were reverted from
 the release baseline, with their submitted commits preserved in history.
