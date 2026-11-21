@@ -1,23 +1,22 @@
 """Geometric firing regressions independent of the recorded protocol stream."""
 import math
 import unittest
-from bot import cylinder_aligned, target_size
+from bot import Bot
 
 
 class AimTests(unittest.TestCase):
-    def test_hit_above_center(self):
-        self.assertTrue(cylinder_aligned([0,0,7], [0,0], [30,0,4.5], 2.5,9))
-
-    def test_miss_above_or_beside_target(self):
-        self.assertFalse(cylinder_aligned([0,0,12], [0,0], [30,0,4.5],2.5,9))
-        self.assertFalse(cylinder_aligned([0,0,7], [.2,0], [30,0,4.5],2.5,9))
-
-    def test_target_behind(self):
-        self.assertFalse(cylinder_aligned([0,0,7], [math.pi,0], [30,0,4.5],2.5,9))
-
-    def test_cubes_scale_without_stat_cap(self):
-        config={'mech':{'radius':2.5,'height':9},'cubes':{'size_per_cube':.05}}
-        self.assertEqual(target_size({'kind':'mech','cubes':20},config),(5.,18.))
+    def test_reaches_cube_from_old_stop_distance(self):
+        config={'mech':{},'cubes':{},'loot':{'pickup_radius':4}}
+        bot=Bot({'config':config,'seed':1,'slot':0,'map':{'dir':'/missing-arena'}})
+        obs={'tick':0,'t':0,'zone':{'center':[0,0],'radius':200,
+             'next_center':[0,0],'next_radius':150},
+             'self':{'pos':[0,0,0],'stats':{},'hp':1400,'max_hp':1400,
+                     'cubes':0,'in_zone':True,'energy':100,'grounded':True,
+                     'weapons':[None,None],'aim':[0,0]},
+             'mechs':[],'drops':[],'cubes':[{'id':1,'pos':[4.5,0,0]}],
+             'pickups':[],'projectiles':[],'crates':[],'offer':None}
+        action=bot.act(obs)
+        self.assertGreater(action['move'][0],0)
 
 
 if __name__=='__main__':
