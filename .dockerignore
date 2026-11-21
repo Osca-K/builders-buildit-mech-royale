@@ -1,0 +1,6 @@
+.git
+.github
+check
+arena
+*.json
+__pycache__
