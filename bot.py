@@ -31,6 +31,86 @@ def inside(x, y, ring):
     return hit
 
 
+def motion_path(velocity, direction, speed, accel, grounded, gravity):
+    """Six tenths of a second of reachable motion, in the server's 20Hz steps."""
+    vx, vy, vz = velocity
+    tx, ty = direction[0]*speed, direction[1]*speed
+    x = y = z = 0.
+    points = [(0., 0., 0.)]
+    for _ in range(12):
+        dx, dy = tx-vx, ty-vy
+        change = math.hypot(dx, dy)
+        fraction = min(1., accel*.05/change) if change else 0.
+        vx += dx*fraction
+        vy += dy*fraction
+        x += vx*.05
+        y += vy*.05
+        if not grounded:
+            vz -= gravity*.05
+            z += vz*.05
+        points.append((x, y, z))
+    return points
+
+
+def projectile_clearance(position, path, height, projectile, gravity):
+    """Horizontal miss distance while the shot overlaps the moving body.
+
+    Minimize over each relative-motion segment, rather than over isolated
+    samples: a 252m/s bullet can cross a whole mech between simulation ticks.
+    """
+    bp, bv = projectile['pos'], projectile['vel']
+    fall = gravity if projectile['kind']=='mortar' else 0.
+    best = 1e9
+    previous = None
+    for i, offset in enumerate(path):
+        t = i*.05
+        relative = (bp[0]+bv[0]*t-position[0]-offset[0],
+                    bp[1]+bv[1]*t-position[1]-offset[1],
+                    bp[2]+bv[2]*t-.5*fall*t*t-position[2]-offset[2])
+        if previous is not None:
+            dx, dy = relative[0]-previous[0], relative[1]-previous[1]
+            den = dx*dx+dy*dy
+            dz = relative[2]-previous[2]
+            lo, hi = 0., 1.
+            if abs(dz)>1e-9:
+                vertical = sorted(((-.5-previous[2])/dz, (height+.5-previous[2])/dz))
+                lo, hi = max(lo,vertical[0]), min(hi,vertical[1])
+            elif not -.5 < previous[2] < height+.5:
+                hi = -1.
+            if lo <= hi:
+                f = max(lo, min(hi, -(previous[0]*dx+previous[1]*dy)/den)) if den else lo
+                best = min(best, math.hypot(previous[0]+dx*f, previous[1]+dy*f))
+        previous = relative
+    return best
+
+
+def target_point(origin, target, config, stats, lightning=None):
+    """Keep baseline aim, unless that body point is outside torso pitch limits."""
+    kind=target.get('kind')
+    point=target['pos'][:]
+    point[2]+=4.5 if kind=='mech' else (1.75 if kind=='npc' else 2.)
+    horizontal=distance(origin,point)
+    pitch=math.atan2(point[2]-origin[2],horizontal)
+    low=stats.get('min_pitch',config['mech'].get('min_pitch',-.7))
+    high=stats.get('max_pitch',config['mech'].get('max_pitch',1.3))
+    if low<=pitch<=high:
+        return point
+    # Lightning's targeting is yaw-only. A nearby arc must not be discarded
+    # merely because the gun cannot lower/raise its barrel that far.
+    if lightning and math.dist(origin,point)<lightning['stats'].get('range',45)-1:
+        return point
+    if kind=='mech':
+        height=config['mech'].get('height',9.)*(1+config['cubes'].get('size_per_cube',.05)*target.get('cubes',0))
+    else:
+        height=config.get('npc' if kind=='npc' else 'crates',{}).get('height',3.5 if kind=='npc' else 2.4)
+    bottom=max(target['pos'][2]+.1,origin[2]+horizontal*math.tan(low))
+    top=min(target['pos'][2]+height-.1,origin[2]+horizontal*math.tan(high))
+    if bottom>top:
+        return None
+    point[2]=max(bottom,min(top,point[2]))
+    return point
+
+
 class Arena:
     def __init__(self, folder):
         self.prisms = []
@@ -133,7 +213,7 @@ class Arena:
 
 
 class Bot:
-    name='Aegis-18'
+    name='Aegis-19'
 
     def __init__(self,hello):
         self.config=hello['config']
@@ -203,16 +283,19 @@ class Bot:
             self.path.pop(0)
         waypoint=self.path[0] if self.path else goal
         base=math.atan2(waypoint[1]-p[1],waypoint[0]-p[0])
-        # Arriving intentionally is not a wall collision. Otherwise the old
-        # timer jumps after standing still, then jets because z is irrelevant
-        # to the horizontal progress test, spending the entire energy reserve.
-        wants_movement=distance(p,goal)>=5 or nearest is not None
-        if self.prev and wants_movement and distance(p,self.prev)<.15:
+        if self.prev and distance(p,self.prev)<.15:
             self.stuck+=.1
         else:
             self.stuck=0.
         self.prev=p[:]
-        speed=stats.get('walk_speed',11.7)
+        disengaging=hp<.45 and nd<100 and me['energy']>40 and me['grounded'] and not self.lightning_rest
+        closing=bool(lightning and not self.lightning_rest and hp>.55 and nd>lightning['stats'].get('range',45)+8 and nd<100 and me['energy']>60)
+        boosting=bool((urgent and me['energy']>15) or disengaging or closing)
+        speed=stats.get('boost_speed',19.5) if boosting and me['grounded'] else stats.get('walk_speed',11.7)
+        if any(w and w['kind']=='laser' and w.get('charge',0)>0 for w in me['weapons']):
+            speed*=stats.get('charge_move_mult',.5)
+        acceleration=stats.get('ground_accel',58.5) if me['grounded'] else stats.get('air_accel',12.)
+        gravity=self.config['mech'].get('gravity',22.)
         best=(-1e30,0.,0.)
         for off in (0,.3,-.3,.65,-.65,1.,-1.,1.5,-1.5,2.,-2.,math.pi):
             a=base+off; vx,vy=math.cos(a),math.sin(a)
@@ -226,25 +309,19 @@ class Bot:
             for e in enemies:
                 ed=distance(q,e['pos'])
                 score-=max(0,(90 if hp<.65 else 40)-ed)*(.55 if hp<.65 else .3)
-            for bullet in o['projectiles']:
-                bp,bv=bullet['pos'],bullet['vel']
-                rx,ry=bp[0]-p[0],bp[1]-p[1]
-                ux,uy=bv[0]-vx*speed,bv[1]-vy*speed
-                den=ux*ux+uy*uy
-                tau=max(0,min(.6,-(rx*ux+ry*uy)/den)) if den else 0
-                miss=math.hypot(rx+ux*tau,ry+uy*tau)
-                if abs(bp[2]+bv[2]*tau-(p[2]+height*.5))<height*.7:
+            if o['projectiles']:
+                reachable=motion_path(me.get('vel',[0,0,0]),(vx,vy),speed,acceleration,me['grounded'],gravity)
+                for bullet in o['projectiles']:
+                    miss=projectile_clearance(p,reachable,height,bullet,self.config['weapons']['mortar']['gravity'])
                     score-=max(0,radius+4-miss)*7
             if score>best[0]:
                 best=(score,vx,vy)
-        disengaging=hp<.45 and nd<100 and me['energy']>40 and me['grounded'] and not self.lightning_rest
-        closing=bool(lightning and not self.lightning_rest and hp>.55 and nd>lightning['stats'].get('range',45)+8 and nd<100 and me['energy']>60)
-        act={'tick':o['tick'],'move':[best[1],best[2]],'boost':bool((urgent and me['energy']>15) or disengaging or closing),
+        act={'tick':o['tick'],'move':[best[1],best[2]],'boost':boosting,
              'jump':bool(self.stuck>.7 and me['grounded'] and me['energy']>35),
              'fire':[False,False]}
         if self.stuck>.8 and not me['grounded'] and me['energy']>15:
             act['boost']=True
-        if not wants_movement:
+        if distance(p,goal)<5 and not nearest:
             act['move']=[0.,0.]
         priority={'nanites':100,'armor':120,'plating':110,'servos':105,
                   'gun_damage':135,'gun_rate':130,'gun_mag':115,'gun_velocity':100,
@@ -262,17 +339,22 @@ class Bot:
                 if q['kind']=='lightning' and 'laser' in kinds and not any(w and w['kind']=='laser' and w.get('charge',0)>0 for w in me['weapons']):
                     act.update(take=q['id'],drop=next(i for i,w in enumerate(me['weapons']) if w and w['kind']=='laser')); break
         origin=[p[0],p[1],p[2]+stats.get('muzzle_height',7.)]
+        available_arc=lightning if not self.lightning_rest and me['energy']>8 else None
         targets=[]
         if not recovering:
             for e in o['mechs']:
-                ep=e['pos'][:]; ep[2]+=4.5 if e['kind']=='mech' else 1.75
+                ep=target_point(origin,e,self.config,stats,available_arc)
+                if ep is None:
+                    continue
                 dd=distance(p,ep)
                 if dd<230 and self.arena.los(origin,ep):
                     score=dd+(30 if e['kind']=='npc' else 0)+e.get('hp',1000)*.025-(15 if e['id']==self.focus else 0)
                     targets.append((score,e,ep))
             if nd>80:
                 for c in o['crates']:
-                    cp=c['pos'][:];cp[2]+=2
+                    cp=target_point(origin,c,self.config,stats,available_arc)
+                    if cp is None:
+                        continue
                     if distance(p,cp)<110 and self.arena.los(origin,cp):
                         targets.append((distance(p,cp)-10,dict(c,vel=[0,0,0]),cp))
         if targets:

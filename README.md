@@ -12,13 +12,14 @@ Docker sandbox flags and map mount. The reference stream is not a simulation.
 Local conformance passed 300/300 decisions within 50 ms; Linux sandbox and real
 match quality require separate verification. No match-performance claim is made.
 
-The current candidate starts from the original 4.23-point entry (b94d7c441285).
-Obstacle-escape jumping and jetting now require intended horizontal travel.
-The previous horizontal-progress timer treated deliberate arrival as blockage,
-triggered a jump after0.8s of rest and then spent energy jetting upward.
-Four regressions distinguish deliberate rest from real blocked travel, both
-grounded and airborne. Run `python -m unittest test_stuck.py`.
-Loot arrival, projectile avoidance, upgrades and combat retain the original baseline.
+The current candidate starts from the 4.25-point entry (f11c16c9496a), whose
+projectile avoidance models acceleration, air control, movement speed and mortar
+gravity. Target selection now checks torso pitch limits: an unreachable close
+target must not prevent firing at a valid farther one. If part of a tall body
+is reachable, it aims there; nearby lightning retains yaw-only targeting.
+Eleven regression tests cover motion and targeting boundary cases.
+Run `python -m unittest test_motion.py test_targeting.py`.
+Loot arrival, upgrade priorities and movement goals retain the original policy.
 Upgrade selection tied at4.23; close-range mech target priority scored4.15;
 cylinder aiming and arrival distance each scored3.85. All were reverted from
 the release baseline, with their submitted commits preserved in history.
