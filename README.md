@@ -12,11 +12,13 @@ Docker sandbox flags and map mount. The reference stream is not a simulation.
 Local conformance passed 300/300 decisions within 50 ms; Linux sandbox and real
 match quality require separate verification. No match-performance claim is made.
 
-The current candidate starts from the original 4.23-point entry (b94d7c441285)
-and reduces the stop radius only for loot goals. Circle positioning, combat,
-and supply-drop arrival retain the original 5m radius. Two regressions check
-that a cube at4.5m is approached while a circle goal at4.5m still stops.
-Run `python -m unittest test_arrival.py`.
+The current candidate starts from the original 4.23-point entry (b94d7c441285).
+Projectile avoidance now models acceleration from observed velocity, air control,
+current boost/laser movement speed, and mortar gravity. It minimizes clearance
+over continuous relative-motion segments so fast bullets crossing between ticks
+are considered. Six regressions include a fast bullet crossing between ticks
+and an impossible instantaneous reversal. Run `python -m unittest test_motion.py`.
+Loot arrival, upgrade choices and weapon targeting retain the original baseline.
 Upgrade selection tied at4.23; close-range mech target priority scored4.15;
 cylinder aiming and arrival distance each scored3.85. All were reverted from
 the release baseline, with their submitted commits preserved in history.
