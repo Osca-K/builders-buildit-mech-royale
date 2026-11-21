@@ -133,7 +133,7 @@ class Arena:
 
 
 class Bot:
-    name='Aegis-15'
+    name='Aegis-04'
 
     def __init__(self,hello):
         self.config=hello['config']
@@ -242,14 +242,10 @@ class Bot:
             act['boost']=True
         if distance(p,goal)<5 and not nearest:
             act['move']=[0.,0.]
-        # Magazine capacity and shorter reload improve sustained gun damage
-        # more than the same tier's fire-rate increase. Lightning range/cone
-        # and efficiency support our existing close-range fighting policy.
-        priority={'nanites':130,'armor':145,'plating':160,'servos':150,
-                  'gun_damage':140,'gun_rate':125,'gun_mag':155,'gun_velocity':135,
-                  'laser_damage':125,'laser_charge':120,'lightning_efficiency':175,
-                  'lightning_range':180,'lightning_chain':135,
-                  'reactor':170 if lightning else 110,'jets':100,'capacitor':120,'gyros':100}
+        priority={'nanites':100,'armor':120,'plating':110,'servos':105,
+                  'gun_damage':135,'gun_rate':130,'gun_mag':115,'gun_velocity':100,
+                  'laser_damage':100,'laser_charge':95,'lightning_efficiency':140,
+                  'lightning_range':125,'reactor':115,'jets':75,'capacitor':105,'gyros':85}
         if o['offer']:
             act['pick']=max(range(len(o['offer']['choices'])),key=lambda i:priority.get(o['offer']['choices'][i]['id'],45))
         kinds=[w['kind'] for w in me['weapons'] if w]
@@ -265,10 +261,6 @@ class Bot:
         targets=[]
         if not recovering:
             for e in o['mechs']:
-                # NPC farming must not divert the torso away from a nearby
-                # hostile mech while its squad is applying combat pressure.
-                if e['kind']=='npc' and nd<85:
-                    continue
                 ep=e['pos'][:]; ep[2]+=4.5 if e['kind']=='mech' else 1.75
                 dd=distance(p,ep)
                 if dd<230 and self.arena.los(origin,ep):
