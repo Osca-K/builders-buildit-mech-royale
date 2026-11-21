@@ -133,7 +133,7 @@ class Arena:
 
 
 class Bot:
-    name='Aegis-02'
+    name='Aegis-03'
 
     def __init__(self,hello):
         self.config=hello['config']
@@ -145,6 +145,8 @@ class Bot:
         self.last_route=-100
         self.prev=None
         self.stuck=0.
+        self.lightning_rest=False
+        self.focus=None
 
     def act(self,o):
         me=o['self']; p=me['pos']; t=o['t']; zone=o['zone']
@@ -158,7 +160,10 @@ class Bot:
         enemies=[e for e in o['mechs'] if e['kind']=='mech']
         nearest=min(enemies,key=lambda e:distance(p,e['pos']),default=None)
         nd=distance(p,nearest['pos']) if nearest else 1e9
-        recovering=hp<.62 and nd>42
+        lightning=next((w for w in me['weapons'] if w and w['kind']=='lightning'),None)
+        if me['energy']<12:self.lightning_rest=True
+        elif me['energy']>65:self.lightning_rest=False
+        recovering=hp<.68 and nd>75
         goal=list(center)
         # Health restoration from uncontested drops can outweigh combat loot.
         drops=[d for d in o['drops'] if d['lands_in']<8 and distance(d['pos'],center)<max(0,zr-10)
@@ -173,17 +178,20 @@ class Bot:
             kinds=[w['kind'] for w in me['weapons'] if w]
             for q in o['pickups']:
                 if q['kind'] not in kinds and abs(q['pos'][2]-p[2])<5:
-                    value={'lightning':55 if zr<140 else 35,'laser':45,'mortar':-100,'gun':-100}[q['kind']]
-                    if len(kinds)<2 or (q['kind']=='lightning' and zr<140):
+                    value={'lightning':85,'laser':25,'mortar':-100,'gun':-100}[q['kind']]
+                    if len(kinds)<2 or q['kind']=='lightning':
                         loot.append((distance(p,q['pos'])-value,q['pos']))
             loot=[(s,q) for s,q in loot if distance(q,center)<safe and not any(distance(e['pos'],q)<35 for e in enemies)]
             if loot and min(loot,key=lambda v:v[0])[0]<55:
                 goal=min(loot,key=lambda v:v[0])[1][:2]
             elif nearest and nd<100:
                 ex,ey=norm(p[0]-nearest['pos'][0],p[1]-nearest['pos'][1])
-                retreat=hp<.75 or nd<55
-                goal=[p[0]+ex*(45 if retreat else 8)-ey*22*self.side,
-                      p[1]+ey*(45 if retreat else 8)+ex*22*self.side]
+                desired=(lightning['stats'].get('range',45)*.78 if lightning and not self.lightning_rest and hp>.36 else 75)
+                goal=[nearest['pos'][0]+ex*desired-ey*16*self.side,
+                      nearest['pos'][1]+ey*desired+ex*16*self.side]
+            elif not nearest or nd>115:
+                crates=[c for c in o['crates'] if distance(p,c['pos'])<75 and abs(c['pos'][2]-p[2])<5 and distance(c['pos'],center)<safe]
+                if crates:goal=min(crates,key=lambda c:distance(p,c['pos']))['pos'][:2]
         d=distance(goal,center)
         if d>safe and d>0:
             goal=[center[0]+(goal[0]-center[0])*safe/d,center[1]+(goal[1]-center[1])*safe/d]
@@ -225,18 +233,19 @@ class Bot:
                     score-=max(0,radius+4-miss)*7
             if score>best[0]:
                 best=(score,vx,vy)
-        disengaging=hp<.72 and nd<100 and me['energy']>30 and me['grounded']
-        act={'tick':o['tick'],'move':[best[1],best[2]],'boost':bool((urgent and me['energy']>15) or disengaging),
+        disengaging=hp<.45 and nd<100 and me['energy']>40 and me['grounded'] and not self.lightning_rest
+        closing=bool(lightning and not self.lightning_rest and hp>.55 and nd>lightning['stats'].get('range',45)+8 and nd<100 and me['energy']>60)
+        act={'tick':o['tick'],'move':[best[1],best[2]],'boost':bool((urgent and me['energy']>15) or disengaging or closing),
              'jump':bool(self.stuck>.7 and me['grounded'] and me['energy']>35),
              'fire':[False,False]}
         if self.stuck>.8 and not me['grounded'] and me['energy']>15:
             act['boost']=True
         if distance(p,goal)<5 and not nearest:
             act['move']=[0.,0.]
-        priority={'nanites':150,'armor':120,'plating':105,'servos':100,
-                  'gun_damage':95,'gun_rate':95,'gun_mag':90,'gun_velocity':85,
-                  'laser_damage':100,'laser_charge':95,'lightning_efficiency':95,
-                  'lightning_range':90,'reactor':80,'jets':75,'capacitor':65,'gyros':70}
+        priority={'nanites':100,'armor':120,'plating':110,'servos':105,
+                  'gun_damage':135,'gun_rate':130,'gun_mag':115,'gun_velocity':100,
+                  'laser_damage':100,'laser_charge':95,'lightning_efficiency':140,
+                  'lightning_range':125,'reactor':115,'jets':75,'capacitor':105,'gyros':85}
         if o['offer']:
             act['pick']=max(range(len(o['offer']['choices'])),key=lambda i:priority.get(o['offer']['choices'][i]['id'],45))
         kinds=[w['kind'] for w in me['weapons'] if w]
@@ -246,7 +255,7 @@ class Bot:
             if distance(p,q['pos'])<self.config['loot']['pickup_radius'] and abs(p[2]-q['pos'][2])<4:
                 if len(kinds)<2:
                     act['take']=q['id']; break
-                if q['kind']=='lightning' and zr<140 and 'laser' in kinds and not any(w and w['kind']=='laser' and w.get('charge',0)>0 for w in me['weapons']):
+                if q['kind']=='lightning' and 'laser' in kinds and not any(w and w['kind']=='laser' and w.get('charge',0)>0 for w in me['weapons']):
                     act.update(take=q['id'],drop=next(i for i,w in enumerate(me['weapons']) if w and w['kind']=='laser')); break
         origin=[p[0],p[1],p[2]+stats.get('muzzle_height',7.)]
         targets=[]
@@ -255,7 +264,7 @@ class Bot:
                 ep=e['pos'][:]; ep[2]+=4.5 if e['kind']=='mech' else 1.75
                 dd=distance(p,ep)
                 if dd<230 and self.arena.los(origin,ep):
-                    score=dd+(30 if e['kind']=='npc' else 0)+e.get('hp',1000)*.025
+                    score=dd+(30 if e['kind']=='npc' else 0)+e.get('hp',1000)*.025-(15 if e['id']==self.focus else 0)
                     targets.append((score,e,ep))
             if nd>80:
                 for c in o['crates']:
@@ -264,6 +273,7 @@ class Bot:
                         targets.append((distance(p,cp)-10,dict(c,vel=[0,0,0]),cp))
         if targets:
             _,target,ep=min(targets,key=lambda x:x[0]); vel=target.get('vel',[0,0,0])
+            self.focus=target['id']
             laser=next((w for w in me['weapons'] if w and w['kind']=='laser'),None)
             direct=bool(laser and laser.get('charge',0)>=laser['stats'].get('charge',.75)-.05)
             gun=next((w for w in me['weapons'] if w and w['kind']=='gun'),None)
@@ -276,6 +286,9 @@ class Bot:
                 roots=[u for u in ((-bb-math.sqrt(disc))/(2*aa),(-bb+math.sqrt(disc))/(2*aa)) if u>0] if disc>=0 and abs(aa)>1e-8 else []
                 flight=min(roots) if roots else math.sqrt(cc)/s
                 aimpoint=[ep[i]+vel[i]*min(1.5,flight) for i in range(3)]
+                if target.get('kind')=='mech' and abs(vel[2])>.2:
+                    aimpoint[2]=max(self.arena.height(aimpoint[0],aimpoint[1])+4.5,
+                                    aimpoint[2]-.5*self.config['mech'].get('gravity',22)*min(1.5,flight)**2)
             dx,dy,dz=[aimpoint[i]-origin[i] for i in range(3)]
             yaw,pitch=math.atan2(dy,dx),math.atan2(dz,math.hypot(dx,dy))
             act['aim']=[yaw,pitch]
@@ -291,7 +304,7 @@ class Bot:
                     charge=w.get('charge',0)
                     act['fire'][i]=bool(w.get('cooldown',0)<=0 and dd<ws.get('range',280) and (charge<ws.get('charge',.75)-.03 or not aligned))
                 elif kind=='lightning':
-                    act['fire'][i]=bool(dd<ws.get('range',45)-1 and abs(angle(yaw,me['aim'][0]))<math.radians(ws.get('cone_deg',30))*.45 and me['energy']>8)
+                    act['fire'][i]=bool(not self.lightning_rest and dd<ws.get('range',45)-1 and abs(angle(yaw,me['aim'][0]))<math.radians(ws.get('cone_deg',30))*.45 and me['energy']>8)
         else:
             if gun:=next((w for w in me['weapons'] if w and w['kind']=='gun'),None):
                 if gun.get('ammo',12)<8: act['reload']=True
