@@ -219,7 +219,7 @@ class Arena:
 
 
 class Bot:
-    name='Aegis-21'
+    name='Aegis-22'
 
     def __init__(self,hello):
         self.config=hello['config']
@@ -251,6 +251,7 @@ class Bot:
         elif me['energy']>65:self.lightning_rest=False
         recovering=hp<.68 and nd>75
         goal=list(center)
+        arrival_radius=5.
         # Health restoration from uncontested drops can outweigh combat loot.
         drops=[d for d in o['drops'] if d['lands_in']<8 and distance(d['pos'],center)<max(0,zr-10)
                and not any(distance(e['pos'],d['pos'])<40 for e in enemies)]
@@ -270,6 +271,8 @@ class Bot:
             loot=[(s,q) for s,q in loot if distance(q,center)<safe and not any(distance(e['pos'],q)<35 for e in enemies)]
             if loot and min(loot,key=lambda v:v[0])[0]<55:
                 goal=min(loot,key=lambda v:v[0])[1][:2]
+                arrival_radius=min(1.5,self.config['loot']['pickup_radius']*.5,
+                                   self.config['cubes']['pickup_radius']*.5)
             elif nearest and nd<100:
                 ex,ey=norm(p[0]-nearest['pos'][0],p[1]-nearest['pos'][1])
                 desired=(lightning['stats'].get('range',45)*.78 if lightning and not self.lightning_rest and hp>.36 else 75)
@@ -289,7 +292,8 @@ class Bot:
             self.path.pop(0)
         waypoint=self.path[0] if self.path else goal
         base=math.atan2(waypoint[1]-p[1],waypoint[0]-p[0])
-        if self.prev and distance(p,self.prev)<.15:
+        wants_movement=distance(p,goal)>=arrival_radius or nearest is not None
+        if self.prev and wants_movement and distance(p,self.prev)<.15:
             self.stuck+=.1
         else:
             self.stuck=0.
@@ -327,7 +331,7 @@ class Bot:
              'fire':[False,False]}
         if self.stuck>.8 and not me['grounded'] and me['energy']>15:
             act['boost']=True
-        if distance(p,goal)<5 and not nearest:
+        if not wants_movement:
             act['move']=[0.,0.]
         priority={'nanites':100,'armor':120,'plating':110,'servos':105,
                   'gun_damage':135,'gun_rate':130,'gun_mag':115,'gun_velocity':100,
