@@ -12,17 +12,15 @@ Docker sandbox flags and map mount. The reference stream is not a simulation.
 Local conformance passed 300/300 decisions within 50 ms; Linux sandbox and real
 match quality require separate verification. No match-performance claim is made.
 
-This experiment starts from the4.25-point entry(f11c16c9496a) and adds mortar
-pickup and ballistic firing. A flight-time solver includes target velocity,
-gravity and the forward barrel displacement, considers low/high arcs, and checks
-terrain/buildings and torso pitch limits. It avoids shots within20m or whose
-predicted impact threatens our own body. The gun resumes its normal aim as soon
-as the mortar enters cooldown. Lightning remains the preferred pickup and can
-replace a mortar. Existing loot arrival and obstacle escape policy are retained.
-Seventeen regression tests cover reachable motion, impacts, cover, aim gating,
-self-splash avoidance and resuming gun fire. Run
-`python -m unittest test_motion.py test_mortar.py`.
-These physics checks do not measure match quality; only official practice does.
+This candidate starts from the4.25-point entry(f11c16c9496a). Ground routes now
+use the live mech radius and height after cube growth. The original fixed9m
+mask routed a10-cube/13.5m mech through a real underpass it could not enter.
+Additional body checks are cached on demand, with four dimension caches and a
+12ms route search budget. A timed-out search returns its safe partial route.
+Ten regression tests cover reachable motion, the actual underpass, cache reuse,
+and search limits. Run `python -m unittest test_motion.py test_navigation.py`.
+Mortar and intentional-rest experiments regressed officially and are excluded.
+Only official practice matches measure placement; these checks do not predict it.
 Upgrade selection tied at4.23; close-range mech target priority scored4.15;
 cylinder aiming and arrival distance each scored3.85. All were reverted from
 the release baseline, with their submitted commits preserved in history.

@@ -4,6 +4,7 @@ import json
 import math
 from pathlib import Path
 import random
+import time
 import mechfight as mf
 
 
@@ -84,47 +85,14 @@ def projectile_clearance(position, path, height, projectile, gravity):
     return best
 
 
-def ballistic_solutions(origin, target, velocity, speed, gravity, offset=0., ttl=7.):
-    """Low/high intercept arcs, including the barrel's forward displacement."""
-    r=[target[i]-origin[i] for i in range(3)]
-    vx,vy,vz=velocity
-    coefficients=(gravity*gravity*.25,gravity*vz,
-                  vx*vx+vy*vy+vz*vz+gravity*r[2]-speed*speed,
-                  2*sum(r[i]*velocity[i] for i in range(3))-2*offset*speed,
-                  sum(v*v for v in r)-offset*offset)
-    def equation(t):
-        value=0.
-        for coefficient in coefficients:
-            value=value*t+coefficient
-        return value
-    previous_t=0.
-    previous=equation(0.)
-    solutions=[]
-    for i in range(1,181):
-        t=ttl*i/180
-        value=equation(t)
-        if (value<0)!=(previous<0):
-            lo,hi=previous_t,t
-            for _ in range(26):
-                mid=(lo+hi)*.5
-                if (equation(mid)<0)==(previous<0):
-                    lo=mid
-                else:
-                    hi=mid
-            flight=(lo+hi)*.5
-            dx=r[0]+vx*flight
-            dy=r[1]+vy*flight
-            dz=r[2]+vz*flight+.5*gravity*flight*flight
-            solutions.append((flight,math.atan2(dy,dx),math.atan2(dz,math.hypot(dx,dy))))
-        previous_t,previous=t,value
-    return solutions
-
-
 class Arena:
     def __init__(self, folder):
         self.prisms = []
         self.buckets = {}
         self.blocked = set()
+        self.body_masks = {}
+        self.expansion_limit = 3000
+        self.route_budget = .012
         self.cell = 7.
         try:
             world = json.loads((Path(folder)/'v2/world.json').read_text())
@@ -183,73 +151,48 @@ class Arena:
                 return False
         return True
 
-    def arc_clear(self,origin,solution,speed,gravity,offset):
-        flight,yaw,pitch=solution
-        direction=(math.cos(pitch)*math.cos(yaw),math.cos(pitch)*math.sin(yaw),math.sin(pitch))
-        muzzle=[origin[j]+direction[j]*offset for j in range(3)]
-        if not self.barrel_clear(origin,muzzle):
-            return False
-        count=max(1,math.ceil((speed*flight+offset)/2))
-        for i in range(count+1):
-            t=flight*i/count
-            p=[origin[j]+direction[j]*(offset+speed*t) for j in range(3)]
-            p[2]-=.5*gravity*t*t
-            if p[2]<self.height(p[0],p[1])+.1:
-                return False
-            for base,top,ring,holes,box in self.buckets.get((math.floor(p[0]/28),math.floor(p[1]/28)),[]):
-                if base<p[2]<top and box[0]<=p[0]<=box[2] and box[1]<=p[1]<=box[3] and inside(p[0],p[1],ring) and not any(inside(p[0],p[1],hole) for hole in holes):
-                    return False
-        return True
+    def body_blocked(self,node,radius,height,cache):
+        if node in self.blocked:
+            return True
+        if node not in cache:
+            x,y=node[0]*self.cell,node[1]*self.cell
+            cache[node]=self.solid(x,y,self.height(x,y),radius,height)
+        return cache[node]
 
-    def barrel_clear(self,a,b):
-        """Check the whole barrel displacement, including arbitrarily thin walls."""
-        dx,dy,dz=[b[i]-a[i] for i in range(3)]
-        candidates={}
-        for ix in range(math.floor(min(a[0],b[0])/28),math.floor(max(a[0],b[0])/28)+1):
-            for iy in range(math.floor(min(a[1],b[1])/28),math.floor(max(a[1],b[1])/28)+1):
-                for item in self.buckets.get((ix,iy),[]):
-                    candidates[id(item)]=item
-        for base,top,ring,holes,box in candidates.values():
-            if max(a[2],b[2])<=base or min(a[2],b[2])>=top:
-                continue
-            cuts=[0.,1.]
-            if abs(dz)>1e-10:
-                cuts.extend(v for v in ((base-a[2])/dz,(top-a[2])/dz) if 0<v<1)
-            for polygon in [ring]+holes:
-                for i in range(0,len(polygon),2):
-                    j=(i+2)%len(polygon)
-                    ex,ey=polygon[j]-polygon[i],polygon[j+1]-polygon[i+1]
-                    den=dx*ey-dy*ex
-                    if abs(den)<1e-10:
-                        continue
-                    rx,ry=polygon[i]-a[0],polygon[i+1]-a[1]
-                    t=(rx*ey-ry*ex)/den
-                    u=(rx*dy-ry*dx)/den
-                    if 0<t<1 and 0<=u<=1:
-                        cuts.append(t)
-            cuts.sort()
-            for lo,hi in zip(cuts,cuts[1:]):
-                t=(lo+hi)*.5
-                x,y,z=a[0]+dx*t,a[1]+dy*t,a[2]+dz*t
-                if base<z<top and inside(x,y,ring) and not any(inside(x,y,hole) for hole in holes):
-                    return False
-        count=max(1,math.ceil(math.dist(a,b)/.25))
-        return all(a[2]+dz*i/count>=self.height(a[0]+dx*i/count,a[1]+dy*i/count)+.1
-                   for i in range(count+1))
-
-    def route(self,p,goal):
+    def route(self,p,goal,radius=3.2,height=9.):
         c=self.cell
+        # Preserve the starter mask; grow it with the actual live body rather
+        # than routing a thirteen-metre mech under a nine-metre underpass.
+        if radius>3.2 or height>9.:
+            body=(round(max(3.2,radius),3),round(max(9.,height),3))
+            if body not in self.body_masks:
+                if len(self.body_masks)>=4:
+                    self.body_masks.pop(next(iter(self.body_masks)))
+                self.body_masks[body]={}
+            cache=self.body_masks[body]
+            blocked=lambda node:self.body_blocked(node,*body,cache)
+            deadline=time.perf_counter()+self.route_budget
+        else:
+            blocked=lambda node:node in self.blocked
+            deadline=None
         start=(round(p[0]/c),round(p[1]/c))
         end=(round(goal[0]/c),round(goal[1]/c))
-        if end in self.blocked:
+        if blocked(end):
             options=[(end[0]+dx,end[1]+dy) for dx in range(-5,6) for dy in range(-5,6)]
-            end=min((a for a in options if a not in self.blocked),key=lambda a:distance(a,end),default=start)
+            options.sort(key=lambda a:distance(a,end))
+            end=start
+            for option in options:
+                if deadline is not None and time.perf_counter()>deadline:
+                    break
+                if not blocked(option):
+                    end=option
+                    break
         queue=[(distance(start,end),0.,start)]
         costs={start:0.}
         parents={}
         best=start
-        for _ in range(3000):
-            if not queue:
+        for iteration in range(self.expansion_limit):
+            if not queue or (deadline is not None and time.perf_counter()>deadline):
                 break
             _,cost,node=heapq.heappop(queue)
             if cost!=costs[node]:
@@ -261,7 +204,7 @@ class Arena:
                 break
             for dx,dy in ((1,0),(-1,0),(0,1),(0,-1),(1,1),(1,-1),(-1,1),(-1,-1)):
                 nxt=(node[0]+dx,node[1]+dy)
-                if nxt in self.blocked or (dx and dy and ((node[0]+dx,node[1]) in self.blocked or (node[0],node[1]+dy) in self.blocked)):
+                if blocked(nxt) or (dx and dy and (blocked((node[0]+dx,node[1])) or blocked((node[0],node[1]+dy)))):
                     continue
                 nc=cost+(1.41421356 if dx and dy else 1.)
                 if nc<costs.get(nxt,1e30):
@@ -276,7 +219,7 @@ class Arena:
 
 
 class Bot:
-    name='Aegis-20'
+    name='Aegis-21'
 
     def __init__(self,hello):
         self.config=hello['config']
@@ -321,7 +264,7 @@ class Bot:
             kinds=[w['kind'] for w in me['weapons'] if w]
             for q in o['pickups']:
                 if q['kind'] not in kinds and abs(q['pos'][2]-p[2])<5:
-                    value={'lightning':85,'laser':25,'mortar':10,'gun':-100}[q['kind']]
+                    value={'lightning':85,'laser':25,'mortar':-100,'gun':-100}[q['kind']]
                     if len(kinds)<2 or q['kind']=='lightning':
                         loot.append((distance(p,q['pos'])-value,q['pos']))
             loot=[(s,q) for s,q in loot if distance(q,center)<safe and not any(distance(e['pos'],q)<35 for e in enemies)]
@@ -339,7 +282,7 @@ class Bot:
         if d>safe and d>0:
             goal=[center[0]+(goal[0]-center[0])*safe/d,center[1]+(goal[1]-center[1])*safe/d]
         if t-self.last_route>2 or self.path_goal is None or distance(goal,self.path_goal)>20:
-            self.path=self.arena.route(p,goal)
+            self.path=self.arena.route(p,goal,radius+.5,height)
             self.path_goal=goal
             self.last_route=t
         while self.path and distance(p,self.path[0])<7:
@@ -394,13 +337,13 @@ class Bot:
             act['pick']=max(range(len(o['offer']['choices'])),key=lambda i:priority.get(o['offer']['choices'][i]['id'],45))
         kinds=[w['kind'] for w in me['weapons'] if w]
         for q in o['pickups']:
-            if q['kind'] in kinds:
+            if q['kind'] in kinds or q['kind']=='mortar':
                 continue
             if distance(p,q['pos'])<self.config['loot']['pickup_radius'] and abs(p[2]-q['pos'][2])<4:
                 if len(kinds)<2:
                     act['take']=q['id']; break
-                if q['kind']=='lightning' and any(kind in kinds for kind in ('laser','mortar')) and not any(w and w['kind']=='laser' and w.get('charge',0)>0 for w in me['weapons']):
-                    act.update(take=q['id'],drop=next(i for i,w in enumerate(me['weapons']) if w and w['kind'] in ('laser','mortar'))); break
+                if q['kind']=='lightning' and 'laser' in kinds and not any(w and w['kind']=='laser' and w.get('charge',0)>0 for w in me['weapons']):
+                    act.update(take=q['id'],drop=next(i for i,w in enumerate(me['weapons']) if w and w['kind']=='laser')); break
         origin=[p[0],p[1],p[2]+stats.get('muzzle_height',7.)]
         targets=[]
         if not recovering:
@@ -435,23 +378,6 @@ class Bot:
                                     aimpoint[2]-.5*self.config['mech'].get('gravity',22)*min(1.5,flight)**2)
             dx,dy,dz=[aimpoint[i]-origin[i] for i in range(3)]
             yaw,pitch=math.atan2(dy,dx),math.atan2(dz,math.hypot(dx,dy))
-            mortar=next((w for w in me['weapons'] if w and w['kind']=='mortar'),None)
-            mortar_aim=None
-            gun_finishes=gun and gun.get('ammo',0)>0 and gun.get('reload',0)<=0 and target.get('hp',1e9)<=gun['stats'].get('damage',45)*(1+self.config['cubes'].get('damage_per_cube',.04)*min(me['cubes'],self.config['cubes'].get('stat_cap',10)))
-            if mortar and not gun_finishes and mortar.get('cooldown',0)<=0 and 20<distance(p,ep)<170 and abs(vel[2])<.2:
-                ms=mortar['stats']
-                tube=[p[0],p[1],p[2]+height+.5]
-                offset=radius+.5
-                arcs=ballistic_solutions(tube,ep,vel,ms.get('speed',72),ms.get('gravity',22),offset,ms.get('ttl',7))
-                low=stats.get('min_pitch',self.config['mech'].get('min_pitch',-.7))
-                high=stats.get('max_pitch',self.config['mech'].get('max_pitch',1.3))
-                own_velocity=me.get('vel',[0,0,0])
-                mortar_aim=next((arc for arc in arcs if low<=arc[2]<=high and
-                    distance([p[j]+own_velocity[j]*arc[0] for j in range(2)],
-                             [ep[j]+vel[j]*arc[0] for j in range(2)])>ms.get('splash_radius',7)+radius+4 and
-                    self.arena.arc_clear(tube,arc,ms.get('speed',72),ms.get('gravity',22),offset)),None)
-                if mortar_aim:
-                    _,yaw,pitch=mortar_aim
             act['aim']=[yaw,pitch]
             tolerance=max(.012,math.atan2(2.8,distance(p,ep)))
             aligned=abs(angle(yaw,me['aim'][0]))<tolerance and abs(pitch-me['aim'][1])<tolerance+.01
@@ -459,10 +385,8 @@ class Bot:
                 if not w: continue
                 kind=w['kind']; ws=w['stats']; dd=distance(p,ep)
                 if kind=='gun':
-                    act['fire'][i]=bool(not mortar_aim and aligned and dd<ws.get('range',230))
+                    act['fire'][i]=bool(aligned and dd<ws.get('range',230))
                     if w.get('ammo',1)==0: act['reload']=True
-                elif kind=='mortar':
-                    act['fire'][i]=bool(mortar_aim and abs(angle(yaw,me['aim'][0]))<max(.008,math.atan2(2.,dd)) and abs(pitch-me['aim'][1])<.015)
                 elif kind=='laser':
                     charge=w.get('charge',0)
                     act['fire'][i]=bool(w.get('cooldown',0)<=0 and dd<ws.get('range',280) and (charge<ws.get('charge',.75)-.03 or not aligned))
