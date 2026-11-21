@@ -133,7 +133,7 @@ class Arena:
 
 
 class Bot:
-    name='Aegis-04'
+    name='Aegis-07'
 
     def __init__(self,hello):
         self.config=hello['config']
@@ -264,13 +264,28 @@ class Bot:
                 ep=e['pos'][:]; ep[2]+=4.5 if e['kind']=='mech' else 1.75
                 dd=distance(p,ep)
                 if dd<230 and self.arena.los(origin,ep):
-                    score=dd+(30 if e['kind']=='npc' else 0)+e.get('hp',1000)*.025-(15 if e['id']==self.focus else 0)
+                    dps=0.
+                    for weapon in me['weapons']:
+                        if not weapon:continue
+                        ws=weapon['stats'];kind=weapon['kind']
+                        if dd>ws.get('range',230):continue
+                        if kind=='gun':
+                            mag=ws.get('mag',12)
+                            dps+=ws.get('damage',45)*mag/(mag*ws.get('cooldown',.24)+ws.get('reload',2.4))*min(1.,60/max(1,dd))
+                        elif kind=='lightning' and not self.lightning_rest and me['energy']>8:
+                            dps+=ws.get('damage',60)/ws.get('cooldown',.25)
+                        elif kind=='laser':
+                            dps+=ws.get('damage',315)/(ws.get('charge',.75)+ws.get('cooldown',1.65))*.8
+                    score=e.get('hp',1000)/max(1,dps)+dd*.005
+                    # Retain focus unless another opponent is materially
+                    # quicker to finish, avoiding damage spread across a squad.
+                    if e['id']==self.focus:score*=.75
                     targets.append((score,e,ep))
             if nd>80:
                 for c in o['crates']:
                     cp=c['pos'][:];cp[2]+=2
                     if distance(p,cp)<110 and self.arena.los(origin,cp):
-                        targets.append((distance(p,cp)-10,dict(c,vel=[0,0,0]),cp))
+                        targets.append((c.get('hp',200)/100+distance(p,cp)*.005,dict(c,vel=[0,0,0]),cp))
         if targets:
             _,target,ep=min(targets,key=lambda x:x[0]); vel=target.get('vel',[0,0,0])
             self.focus=target['id']
