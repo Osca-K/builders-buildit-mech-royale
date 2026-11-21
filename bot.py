@@ -164,11 +164,20 @@ class Bot:
         if me['energy']<12:self.lightning_rest=True
         elif me['energy']>65:self.lightning_rest=False
         recovering=hp<.68 and nd>75
-        goal=list(center)
-        # Health restoration from uncontested drops can outweigh combat loot.
-        drops=[d for d in o['drops'] if d['lands_in']<8 and distance(d['pos'],center)<max(0,zr-10)
-               and not any(distance(e['pos'],d['pos'])<40 for e in enemies)]
-        if drops and hp<.85 and not urgent:
+        # Holding an already-safe position avoids broadcasting footsteps and
+        # converging on the highly contested circle centre.  Project inward
+        # only when the current position is outside the next safe envelope.
+        goal=p[:2]
+        from_next=distance(p,center)
+        if from_next>safe and from_next>0:
+            goal=[center[0]+(p[0]-center[0])*safe/from_next,
+                  center[1]+(p[1]-center[1])*safe/from_next]
+        # An uncontested supply drop is worth three cubes plus full health and
+        # energy. Start travelling when its landing time roughly matches ETA.
+        drops=[d for d in o['drops'] if d['lands_in']<max(8,distance(p,d['pos'])/max(1,stats.get('walk_speed',11.7))+3)
+               and distance(p,d['pos'])<145 and distance(d['pos'],center)<max(0,zr-10)
+               and not any(distance(e['pos'],d['pos'])<48 for e in enemies)]
+        if drops and not urgent and (hp<.95 or me['cubes']<8 or me['energy']<70):
             goal=min(drops,key=lambda d:distance(p,d['pos']))['pos'][:2]
         elif not urgent:
             loot=[]
