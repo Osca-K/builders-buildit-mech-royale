@@ -133,7 +133,7 @@ class Arena:
 
 
 class Bot:
-    name='Aegis-05'
+    name='Aegis-04'
 
     def __init__(self,hello):
         self.config=hello['config']
@@ -146,7 +146,6 @@ class Bot:
         self.prev=None
         self.stuck=0.
         self.lightning_rest=False
-        self.recovering=False
         self.focus=None
 
     def act(self,o):
@@ -164,14 +163,7 @@ class Bot:
         lightning=next((w for w in me['weapons'] if w and w['kind']=='lightning'),None)
         if me['energy']<12:self.lightning_rest=True
         elif me['energy']>65:self.lightning_rest=False
-        # Keep a quiet regeneration window once opponents are far enough away.
-        # Resume fighting if one closes in; do not trade close-range damage
-        # for a regeneration timer that incoming damage would reset anyway.
-        if hp>=.88 or nd<60:
-            self.recovering=False
-        elif hp<.68 and nd>75:
-            self.recovering=True
-        recovering=self.recovering
+        recovering=hp<.68 and nd>75
         goal=list(center)
         # Health restoration from uncontested drops can outweigh combat loot.
         drops=[d for d in o['drops'] if d['lands_in']<8 and distance(d['pos'],center)<max(0,zr-10)
@@ -194,7 +186,7 @@ class Bot:
                 goal=min(loot,key=lambda v:v[0])[1][:2]
             elif nearest and nd<100:
                 ex,ey=norm(p[0]-nearest['pos'][0],p[1]-nearest['pos'][1])
-                desired=(lightning['stats'].get('range',45)*.78 if lightning and not self.lightning_rest and hp>.36 and not recovering else 95 if recovering else 75)
+                desired=(lightning['stats'].get('range',45)*.78 if lightning and not self.lightning_rest and hp>.36 else 75)
                 goal=[nearest['pos'][0]+ex*desired-ey*16*self.side,
                       nearest['pos'][1]+ey*desired+ex*16*self.side]
             elif not nearest or nd>115:
@@ -242,7 +234,7 @@ class Bot:
             if score>best[0]:
                 best=(score,vx,vy)
         disengaging=hp<.45 and nd<100 and me['energy']>40 and me['grounded'] and not self.lightning_rest
-        closing=bool(lightning and not self.lightning_rest and not recovering and hp>.55 and nd>lightning['stats'].get('range',45)+8 and nd<100 and me['energy']>60)
+        closing=bool(lightning and not self.lightning_rest and hp>.55 and nd>lightning['stats'].get('range',45)+8 and nd<100 and me['energy']>60)
         act={'tick':o['tick'],'move':[best[1],best[2]],'boost':bool((urgent and me['energy']>15) or disengaging or closing),
              'jump':bool(self.stuck>.7 and me['grounded'] and me['energy']>35),
              'fire':[False,False]}
