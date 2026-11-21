@@ -133,7 +133,7 @@ class Arena:
 
 
 class Bot:
-    name='Aegis-01'
+    name='Aegis-02'
 
     def __init__(self,hello):
         self.config=hello['config']
@@ -173,8 +173,8 @@ class Bot:
             kinds=[w['kind'] for w in me['weapons'] if w]
             for q in o['pickups']:
                 if q['kind'] not in kinds and abs(q['pos'][2]-p[2])<5:
-                    value={'lightning':35,'laser':29,'mortar':-100,'gun':-100}[q['kind']]
-                    if len(kinds)<2 or q['kind']=='lightning':
+                    value={'lightning':55 if zr<140 else 35,'laser':45,'mortar':-100,'gun':-100}[q['kind']]
+                    if len(kinds)<2 or (q['kind']=='lightning' and zr<140):
                         loot.append((distance(p,q['pos'])-value,q['pos']))
             loot=[(s,q) for s,q in loot if distance(q,center)<safe and not any(distance(e['pos'],q)<35 for e in enemies)]
             if loot and min(loot,key=lambda v:v[0])[0]<55:
@@ -225,14 +225,18 @@ class Bot:
                     score-=max(0,radius+4-miss)*7
             if score>best[0]:
                 best=(score,vx,vy)
-        act={'tick':o['tick'],'move':[best[1],best[2]],'boost':bool(urgent and me['energy']>15),
+        disengaging=hp<.72 and nd<100 and me['energy']>30 and me['grounded']
+        act={'tick':o['tick'],'move':[best[1],best[2]],'boost':bool((urgent and me['energy']>15) or disengaging),
              'jump':bool(self.stuck>.7 and me['grounded'] and me['energy']>35),
              'fire':[False,False]}
         if self.stuck>.8 and not me['grounded'] and me['energy']>15:
             act['boost']=True
         if distance(p,goal)<5 and not nearest:
             act['move']=[0.,0.]
-        priority={'regen':100,'armor':90,'hp':85,'max_hp':85,'speed':75,'energy_regen':70,'gun_rate':60,'gun_damage':60}
+        priority={'nanites':150,'armor':120,'plating':105,'servos':100,
+                  'gun_damage':95,'gun_rate':95,'gun_mag':90,'gun_velocity':85,
+                  'laser_damage':100,'laser_charge':95,'lightning_efficiency':95,
+                  'lightning_range':90,'reactor':80,'jets':75,'capacitor':65,'gyros':70}
         if o['offer']:
             act['pick']=max(range(len(o['offer']['choices'])),key=lambda i:priority.get(o['offer']['choices'][i]['id'],45))
         kinds=[w['kind'] for w in me['weapons'] if w]
@@ -242,7 +246,7 @@ class Bot:
             if distance(p,q['pos'])<self.config['loot']['pickup_radius'] and abs(p[2]-q['pos'][2])<4:
                 if len(kinds)<2:
                     act['take']=q['id']; break
-                if q['kind']=='lightning' and 'laser' in kinds and not any(w and w['kind']=='laser' and w.get('charge',0)>0 for w in me['weapons']):
+                if q['kind']=='lightning' and zr<140 and 'laser' in kinds and not any(w and w['kind']=='laser' and w.get('charge',0)>0 for w in me['weapons']):
                     act.update(take=q['id'],drop=next(i for i,w in enumerate(me['weapons']) if w and w['kind']=='laser')); break
         origin=[p[0],p[1],p[2]+stats.get('muzzle_height',7.)]
         targets=[]
