@@ -20,6 +20,27 @@ def angle(a, b):
     return (a-b+math.pi) % (2*math.pi)-math.pi
 
 
+def target_size(target, config):
+    if target.get('kind') == 'mech':
+        mech = config['mech']
+        scale = 1 + config['cubes'].get('size_per_cube', .05) * target.get('cubes', 0)
+        return mech.get('radius', 2.5) * scale, mech.get('height', 9.) * scale
+    return (1.5, 3.5) if target.get('kind') == 'npc' else (2., 4.)
+
+
+def cylinder_aligned(origin, aim, center, radius, height):
+    """Check the actual firing ray against a conservative target cylinder."""
+    dx,dy=center[0]-origin[0],center[1]-origin[1]
+    yaw=math.atan2(dy,dx)
+    error=angle(yaw,aim[0])
+    horizontal=math.hypot(dx,dy)
+    along=horizontal*math.cos(error)
+    if along<=0 or abs(horizontal*math.sin(error))>radius*.85:
+        return False
+    z=origin[2]+along*math.tan(aim[1])
+    return center[2]-height*.42<=z<=center[2]+height*.42
+
+
 def inside(x, y, ring):
     hit = False
     j = len(ring)-2
@@ -133,7 +154,7 @@ class Arena:
 
 
 class Bot:
-    name='Aegis-04'
+    name='Aegis-12'
 
     def __init__(self,hello):
         self.config=hello['config']
@@ -233,14 +254,9 @@ class Bot:
                     score-=max(0,radius+4-miss)*7
             if score>best[0]:
                 best=(score,vx,vy)
-        nearby=sum(distance(p,e['pos'])<85 for e in enemies)
-        # The practice opponents coordinate as a squad. Spend energy to break
-        # contact when several can focus us, while preserving the proven
-        # lightning closing behavior in ordinary one-on-one fights.
-        outnumbered=hp<.72 and nearby>=3 and me['energy']>35 and me['grounded']
         disengaging=hp<.45 and nd<100 and me['energy']>40 and me['grounded'] and not self.lightning_rest
         closing=bool(lightning and not self.lightning_rest and hp>.55 and nd>lightning['stats'].get('range',45)+8 and nd<100 and me['energy']>60)
-        act={'tick':o['tick'],'move':[best[1],best[2]],'boost':bool((urgent and me['energy']>15) or outnumbered or disengaging or closing),
+        act={'tick':o['tick'],'move':[best[1],best[2]],'boost':bool((urgent and me['energy']>15) or disengaging or closing),
              'jump':bool(self.stuck>.7 and me['grounded'] and me['energy']>35),
              'fire':[False,False]}
         if self.stuck>.8 and not me['grounded'] and me['energy']>15:
@@ -266,7 +282,8 @@ class Bot:
         targets=[]
         if not recovering:
             for e in o['mechs']:
-                ep=e['pos'][:]; ep[2]+=4.5 if e['kind']=='mech' else 1.75
+                _,target_height=target_size(e,self.config)
+                ep=e['pos'][:]; ep[2]+=target_height*.5
                 dd=distance(p,ep)
                 if dd<230 and self.arena.los(origin,ep):
                     score=dd+(30 if e['kind']=='npc' else 0)+e.get('hp',1000)*.025-(15 if e['id']==self.focus else 0)
@@ -280,10 +297,10 @@ class Bot:
             _,target,ep=min(targets,key=lambda x:x[0]); vel=target.get('vel',[0,0,0])
             self.focus=target['id']
             laser=next((w for w in me['weapons'] if w and w['kind']=='laser'),None)
-            direct=bool(laser and laser.get('charge',0)>=laser['stats'].get('charge',.75)-.05)
+            direct=bool(laser and laser.get('charge',0)>=laser['stats'].get('min_charge',.15))
             gun=next((w for w in me['weapons'] if w and w['kind']=='gun'),None)
             aimpoint=ep[:]
-            if gun and not direct:
+            if gun:
                 s=gun['stats'].get('speed',252.)
                 rx=[ep[i]-origin[i] for i in range(3)]
                 aa=sum(v*v for v in vel)-s*s; bb=2*sum(rx[i]*vel[i] for i in range(3)); cc=sum(v*v for v in rx)
@@ -292,22 +309,25 @@ class Bot:
                 flight=min(roots) if roots else math.sqrt(cc)/s
                 aimpoint=[ep[i]+vel[i]*min(1.5,flight) for i in range(3)]
                 if target.get('kind')=='mech' and abs(vel[2])>.2:
-                    aimpoint[2]=max(self.arena.height(aimpoint[0],aimpoint[1])+4.5,
+                    aimpoint[2]=max(self.arena.height(aimpoint[0],aimpoint[1])+target_size(target,self.config)[1]*.5,
                                     aimpoint[2]-.5*self.config['mech'].get('gravity',22)*min(1.5,flight)**2)
+            gunpoint=aimpoint
+            if direct:aimpoint=ep
             dx,dy,dz=[aimpoint[i]-origin[i] for i in range(3)]
             yaw,pitch=math.atan2(dy,dx),math.atan2(dz,math.hypot(dx,dy))
             act['aim']=[yaw,pitch]
-            tolerance=max(.012,math.atan2(2.8,distance(p,ep)))
-            aligned=abs(angle(yaw,me['aim'][0]))<tolerance and abs(pitch-me['aim'][1])<tolerance+.01
+            target_radius,target_height=target_size(target,self.config)
+            gun_aligned=cylinder_aligned(origin,me['aim'],gunpoint,target_radius,target_height)
+            laser_aligned=cylinder_aligned(origin,me['aim'],ep,target_radius,target_height)
             for i,w in enumerate(me['weapons']):
                 if not w: continue
                 kind=w['kind']; ws=w['stats']; dd=distance(p,ep)
                 if kind=='gun':
-                    act['fire'][i]=bool(aligned and dd<ws.get('range',230))
+                    act['fire'][i]=bool(gun_aligned and dd<ws.get('range',230))
                     if w.get('ammo',1)==0: act['reload']=True
                 elif kind=='laser':
                     charge=w.get('charge',0)
-                    act['fire'][i]=bool(w.get('cooldown',0)<=0 and dd<ws.get('range',280) and (charge<ws.get('charge',.75)-.03 or not aligned))
+                    act['fire'][i]=bool(w.get('cooldown',0)<=0 and dd<ws.get('range',280) and (charge<ws.get('charge',.75)-.03 or not laser_aligned))
                 elif kind=='lightning':
                     # Lightning selects its own nearest target in the actual
                     # torso cone. Gun lead/focus must not suppress a valid arc
