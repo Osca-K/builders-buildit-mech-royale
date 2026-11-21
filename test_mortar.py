@@ -48,6 +48,26 @@ class MortarTests(unittest.TestCase):
         self.assertFalse(arena.arc_clear(origin,arcs[0],72,22,3))
         self.assertTrue(arena.arc_clear(origin,arcs[1],72,22,3))
 
+    def test_thin_wall_inside_barrel_offset_blocks_arc(self):
+        arena=Arena('/missing-arena')
+        ring=[1,-2,1.01,-2,1.01,2,1,2]
+        item=(0,20,ring,[],(1,-2,1.01,2))
+        arena.buckets[(0,0)]=[item]
+        origin=[0,0,9.5]
+        arc=ballistic_solutions(origin,[70,0,4.5],[0,0,0],72,22,3)[0]
+        self.assertFalse(arena.arc_clear(origin,arc,72,22,3))
+
+    def test_barrel_can_cross_an_actual_prism_hole(self):
+        arena=Arena('/missing-arena')
+        ring=[-5,-5,5,-5,5,5,-5,5]
+        hole=[-4,-1,4,-1,4,1,-4,1]
+        item=(0,20,ring,[hole],(-5,-5,5,5))
+        for x in (-1,0):
+            for y in (-1,0):
+                arena.buckets[(x,y)]=[item]
+        self.assertTrue(arena.barrel_clear([0,0,9.5],[3,0,9.5]))
+        self.assertFalse(arena.barrel_clear([0,0,9.5],[3,2,9.5]))
+
     def observation(self,distance=70,cooldown=0):
         config={'mech':{},'cubes':{},'loot':{'pickup_radius':4},'weapons':{'mortar':{'gravity':22}}}
         bot=Bot({'config':config,'seed':1,'slot':0,'map':{'dir':'/missing-arena'}})

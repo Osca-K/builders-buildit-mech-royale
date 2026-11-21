@@ -186,6 +186,9 @@ class Arena:
     def arc_clear(self,origin,solution,speed,gravity,offset):
         flight,yaw,pitch=solution
         direction=(math.cos(pitch)*math.cos(yaw),math.cos(pitch)*math.sin(yaw),math.sin(pitch))
+        muzzle=[origin[j]+direction[j]*offset for j in range(3)]
+        if not self.barrel_clear(origin,muzzle):
+            return False
         count=max(1,math.ceil((speed*flight+offset)/2))
         for i in range(count+1):
             t=flight*i/count
@@ -197,6 +200,42 @@ class Arena:
                 if base<p[2]<top and box[0]<=p[0]<=box[2] and box[1]<=p[1]<=box[3] and inside(p[0],p[1],ring) and not any(inside(p[0],p[1],hole) for hole in holes):
                     return False
         return True
+
+    def barrel_clear(self,a,b):
+        """Check the whole barrel displacement, including arbitrarily thin walls."""
+        dx,dy,dz=[b[i]-a[i] for i in range(3)]
+        candidates={}
+        for ix in range(math.floor(min(a[0],b[0])/28),math.floor(max(a[0],b[0])/28)+1):
+            for iy in range(math.floor(min(a[1],b[1])/28),math.floor(max(a[1],b[1])/28)+1):
+                for item in self.buckets.get((ix,iy),[]):
+                    candidates[id(item)]=item
+        for base,top,ring,holes,box in candidates.values():
+            if max(a[2],b[2])<=base or min(a[2],b[2])>=top:
+                continue
+            cuts=[0.,1.]
+            if abs(dz)>1e-10:
+                cuts.extend(v for v in ((base-a[2])/dz,(top-a[2])/dz) if 0<v<1)
+            for polygon in [ring]+holes:
+                for i in range(0,len(polygon),2):
+                    j=(i+2)%len(polygon)
+                    ex,ey=polygon[j]-polygon[i],polygon[j+1]-polygon[i+1]
+                    den=dx*ey-dy*ex
+                    if abs(den)<1e-10:
+                        continue
+                    rx,ry=polygon[i]-a[0],polygon[i+1]-a[1]
+                    t=(rx*ey-ry*ex)/den
+                    u=(rx*dy-ry*dx)/den
+                    if 0<t<1 and 0<=u<=1:
+                        cuts.append(t)
+            cuts.sort()
+            for lo,hi in zip(cuts,cuts[1:]):
+                t=(lo+hi)*.5
+                x,y,z=a[0]+dx*t,a[1]+dy*t,a[2]+dz*t
+                if base<z<top and inside(x,y,ring) and not any(inside(x,y,hole) for hole in holes):
+                    return False
+        count=max(1,math.ceil(math.dist(a,b)/.25))
+        return all(a[2]+dz*i/count>=self.height(a[0]+dx*i/count,a[1]+dy*i/count)+.1
+                   for i in range(count+1))
 
     def route(self,p,goal):
         c=self.cell

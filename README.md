@@ -19,7 +19,7 @@ terrain/buildings and torso pitch limits. It avoids shots within20m or whose
 predicted impact threatens our own body. The gun resumes its normal aim as soon
 as the mortar enters cooldown. Lightning remains the preferred pickup and can
 replace a mortar. Existing loot arrival and obstacle escape policy are retained.
-Fifteen regression tests cover reachable motion, impacts, cover, aim gating,
+Seventeen regression tests cover reachable motion, impacts, cover, aim gating,
 self-splash avoidance and resuming gun fire. Run
 `python -m unittest test_motion.py test_mortar.py`.
 These physics checks do not measure match quality; only official practice does.
