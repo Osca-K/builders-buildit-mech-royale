@@ -133,7 +133,7 @@ class Arena:
 
 
 class Bot:
-    name='Aegis-03'
+    name='Aegis-04'
 
     def __init__(self,hello):
         self.config=hello['config']
@@ -304,7 +304,15 @@ class Bot:
                     charge=w.get('charge',0)
                     act['fire'][i]=bool(w.get('cooldown',0)<=0 and dd<ws.get('range',280) and (charge<ws.get('charge',.75)-.03 or not aligned))
                 elif kind=='lightning':
-                    act['fire'][i]=bool(not self.lightning_rest and dd<ws.get('range',45)-1 and abs(angle(yaw,me['aim'][0]))<math.radians(ws.get('cone_deg',30))*.45 and me['energy']>8)
+                    # Lightning selects its own nearest target in the actual
+                    # torso cone. Gun lead/focus must not suppress a valid arc
+                    # against a different nearby opponent while we turn.
+                    arc_range=ws.get('range',45)-1
+                    arc_cone=math.radians(ws.get('cone_deg',30))*.9
+                    arc_target=any(math.dist(origin,tp)<arc_range and
+                        abs(angle(math.atan2(tp[1]-origin[1],tp[0]-origin[0]),me['aim'][0]))<arc_cone
+                        for _,_,tp in targets)
+                    act['fire'][i]=bool(not self.lightning_rest and arc_target and me['energy']>8)
         else:
             if gun:=next((w for w in me['weapons'] if w and w['kind']=='gun'),None):
                 if gun.get('ammo',12)<8: act['reload']=True
