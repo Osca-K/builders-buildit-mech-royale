@@ -186,7 +186,12 @@ class Bot:
                 goal=min(loot,key=lambda v:v[0])[1][:2]
             elif nearest and nd<100:
                 ex,ey=norm(p[0]-nearest['pos'][0],p[1]-nearest['pos'][1])
-                desired=(lightning['stats'].get('range',45)*.78 if lightning and not self.lightning_rest and hp>.36 else 75)
+                # Preserve placement while the field is crowded. Lightning is
+                # strongest after the field thins; closing into a full squad
+                # early exposes us to several house bots for one short-range arc.
+                late=o.get('alive',16)<=8
+                arc_push=lightning and not self.lightning_rest and hp>.55 and (late or nd<55)
+                desired=(lightning['stats'].get('range',45)*.78 if arc_push else (82 if not late else 75))
                 goal=[nearest['pos'][0]+ex*desired-ey*16*self.side,
                       nearest['pos'][1]+ey*desired+ex*16*self.side]
             elif not nearest or nd>115:
@@ -209,7 +214,7 @@ class Bot:
             self.stuck=0.
         self.prev=p[:]
         speed=stats.get('walk_speed',11.7)
-        best=(-1e30,0.,0.,False)
+        best=(-1e30,0.,0.)
         for off in (0,.3,-.3,.65,-.65,1.,-1.,1.5,-1.5,2.,-2.,math.pi):
             a=base+off; vx,vy=math.cos(a),math.sin(a)
             q=[p[0]+vx*7,p[1]+vy*7,p[2]]
@@ -222,7 +227,6 @@ class Bot:
             for e in enemies:
                 ed=distance(q,e['pos'])
                 score-=max(0,(90 if hp<.65 else 40)-ed)*(.55 if hp<.65 else .3)
-            projectile_threat=False
             for bullet in o['projectiles']:
                 bp,bv=bullet['pos'],bullet['vel']
                 rx,ry=bp[0]-p[0],bp[1]-p[1]
@@ -232,14 +236,12 @@ class Bot:
                 miss=math.hypot(rx+ux*tau,ry+uy*tau)
                 if abs(bp[2]+bv[2]*tau-(p[2]+height*.5))<height*.7:
                     score-=max(0,radius+4-miss)*7
-                    if tau>0 and miss<radius+2:
-                        projectile_threat=True
             if score>best[0]:
-                best=(score,vx,vy,projectile_threat)
+                best=(score,vx,vy)
         disengaging=hp<.45 and nd<100 and me['energy']>40 and me['grounded'] and not self.lightning_rest
-        closing=bool(lightning and not self.lightning_rest and hp>.55 and nd>lightning['stats'].get('range',45)+8 and nd<100 and me['energy']>60)
-        evasive=best[3] and me['energy']>30 and me['grounded']
-        act={'tick':o['tick'],'move':[best[1],best[2]],'boost':bool((urgent and me['energy']>15) or disengaging or closing or evasive),
+        closing=bool(lightning and not self.lightning_rest and hp>.55 and o.get('alive',16)<=8 and
+                     nd>lightning['stats'].get('range',45)+8 and nd<100 and me['energy']>60)
+        act={'tick':o['tick'],'move':[best[1],best[2]],'boost':bool((urgent and me['energy']>15) or disengaging or closing),
              'jump':bool(self.stuck>.7 and me['grounded'] and me['energy']>35),
              'fire':[False,False]}
         if self.stuck>.8 and not me['grounded'] and me['energy']>15:
