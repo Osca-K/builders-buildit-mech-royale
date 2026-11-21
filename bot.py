@@ -133,7 +133,7 @@ class Arena:
 
 
 class Bot:
-    name='Aegis-04'
+    name='Aegis-06'
 
     def __init__(self,hello):
         self.config=hello['config']
@@ -246,6 +246,17 @@ class Bot:
                   'gun_damage':135,'gun_rate':130,'gun_mag':115,'gun_velocity':100,
                   'laser_damage':100,'laser_charge':95,'lightning_efficiency':140,
                   'lightning_range':125,'reactor':115,'jets':75,'capacitor':105,'gyros':85}
+        # Compare sustained gun damage including reload downtime. The first
+        # drum magazine raises stock sustained DPS by about 31%, whereas a
+        # fire-rate upgrade spends more of each cycle waiting for a reload.
+        held_gun=next((w for w in me['weapons'] if w and w['kind']=='gun'),None)
+        if held_gun:
+            gs=held_gun['stats'];mag=gs.get('mag',12);cooldown=gs.get('cooldown',.24);reload=gs.get('reload',2.4)
+            cycle=mag*cooldown+reload
+            gains={'gun_mag':((mag+8)/( (mag+8)*cooldown+reload*.8))/(mag/cycle)-1,
+                   'gun_damage':.15,'gun_rate':cycle/(mag*cooldown*.87+reload)-1}
+            for upgrade,gain in gains.items():
+                priority[upgrade]=120+100*gain
         if o['offer']:
             act['pick']=max(range(len(o['offer']['choices'])),key=lambda i:priority.get(o['offer']['choices'][i]['id'],45))
         kinds=[w['kind'] for w in me['weapons'] if w]
