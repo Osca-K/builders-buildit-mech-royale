@@ -84,31 +84,40 @@ def projectile_clearance(position, path, height, projectile, gravity):
     return best
 
 
-def target_point(origin, target, config, stats, lightning=None):
-    """Keep baseline aim, unless that body point is outside torso pitch limits."""
-    kind=target.get('kind')
-    point=target['pos'][:]
-    point[2]+=4.5 if kind=='mech' else (1.75 if kind=='npc' else 2.)
-    horizontal=distance(origin,point)
-    pitch=math.atan2(point[2]-origin[2],horizontal)
-    low=stats.get('min_pitch',config['mech'].get('min_pitch',-.7))
-    high=stats.get('max_pitch',config['mech'].get('max_pitch',1.3))
-    if low<=pitch<=high:
-        return point
-    # Lightning's targeting is yaw-only. A nearby arc must not be discarded
-    # merely because the gun cannot lower/raise its barrel that far.
-    if lightning and math.dist(origin,point)<lightning['stats'].get('range',45)-1:
-        return point
-    if kind=='mech':
-        height=config['mech'].get('height',9.)*(1+config['cubes'].get('size_per_cube',.05)*target.get('cubes',0))
-    else:
-        height=config.get('npc' if kind=='npc' else 'crates',{}).get('height',3.5 if kind=='npc' else 2.4)
-    bottom=max(target['pos'][2]+.1,origin[2]+horizontal*math.tan(low))
-    top=min(target['pos'][2]+height-.1,origin[2]+horizontal*math.tan(high))
-    if bottom>top:
-        return None
-    point[2]=max(bottom,min(top,point[2]))
-    return point
+def ballistic_solutions(origin, target, velocity, speed, gravity, offset=0., ttl=7.):
+    """Low/high intercept arcs, including the barrel's forward displacement."""
+    r=[target[i]-origin[i] for i in range(3)]
+    vx,vy,vz=velocity
+    coefficients=(gravity*gravity*.25,gravity*vz,
+                  vx*vx+vy*vy+vz*vz+gravity*r[2]-speed*speed,
+                  2*sum(r[i]*velocity[i] for i in range(3))-2*offset*speed,
+                  sum(v*v for v in r)-offset*offset)
+    def equation(t):
+        value=0.
+        for coefficient in coefficients:
+            value=value*t+coefficient
+        return value
+    previous_t=0.
+    previous=equation(0.)
+    solutions=[]
+    for i in range(1,181):
+        t=ttl*i/180
+        value=equation(t)
+        if (value<0)!=(previous<0):
+            lo,hi=previous_t,t
+            for _ in range(26):
+                mid=(lo+hi)*.5
+                if (equation(mid)<0)==(previous<0):
+                    lo=mid
+                else:
+                    hi=mid
+            flight=(lo+hi)*.5
+            dx=r[0]+vx*flight
+            dy=r[1]+vy*flight
+            dz=r[2]+vz*flight+.5*gravity*flight*flight
+            solutions.append((flight,math.atan2(dy,dx),math.atan2(dz,math.hypot(dx,dy))))
+        previous_t,previous=t,value
+    return solutions
 
 
 class Arena:
@@ -174,6 +183,21 @@ class Arena:
                 return False
         return True
 
+    def arc_clear(self,origin,solution,speed,gravity,offset):
+        flight,yaw,pitch=solution
+        direction=(math.cos(pitch)*math.cos(yaw),math.cos(pitch)*math.sin(yaw),math.sin(pitch))
+        count=max(1,math.ceil((speed*flight+offset)/2))
+        for i in range(count+1):
+            t=flight*i/count
+            p=[origin[j]+direction[j]*(offset+speed*t) for j in range(3)]
+            p[2]-=.5*gravity*t*t
+            if p[2]<self.height(p[0],p[1])+.1:
+                return False
+            for base,top,ring,holes,box in self.buckets.get((math.floor(p[0]/28),math.floor(p[1]/28)),[]):
+                if base<p[2]<top and box[0]<=p[0]<=box[2] and box[1]<=p[1]<=box[3] and inside(p[0],p[1],ring) and not any(inside(p[0],p[1],hole) for hole in holes):
+                    return False
+        return True
+
     def route(self,p,goal):
         c=self.cell
         start=(round(p[0]/c),round(p[1]/c))
@@ -213,7 +237,7 @@ class Arena:
 
 
 class Bot:
-    name='Aegis-19'
+    name='Aegis-20'
 
     def __init__(self,hello):
         self.config=hello['config']
@@ -258,7 +282,7 @@ class Bot:
             kinds=[w['kind'] for w in me['weapons'] if w]
             for q in o['pickups']:
                 if q['kind'] not in kinds and abs(q['pos'][2]-p[2])<5:
-                    value={'lightning':85,'laser':25,'mortar':-100,'gun':-100}[q['kind']]
+                    value={'lightning':85,'laser':25,'mortar':10,'gun':-100}[q['kind']]
                     if len(kinds)<2 or q['kind']=='lightning':
                         loot.append((distance(p,q['pos'])-value,q['pos']))
             loot=[(s,q) for s,q in loot if distance(q,center)<safe and not any(distance(e['pos'],q)<35 for e in enemies)]
@@ -331,30 +355,25 @@ class Bot:
             act['pick']=max(range(len(o['offer']['choices'])),key=lambda i:priority.get(o['offer']['choices'][i]['id'],45))
         kinds=[w['kind'] for w in me['weapons'] if w]
         for q in o['pickups']:
-            if q['kind'] in kinds or q['kind']=='mortar':
+            if q['kind'] in kinds:
                 continue
             if distance(p,q['pos'])<self.config['loot']['pickup_radius'] and abs(p[2]-q['pos'][2])<4:
                 if len(kinds)<2:
                     act['take']=q['id']; break
-                if q['kind']=='lightning' and 'laser' in kinds and not any(w and w['kind']=='laser' and w.get('charge',0)>0 for w in me['weapons']):
-                    act.update(take=q['id'],drop=next(i for i,w in enumerate(me['weapons']) if w and w['kind']=='laser')); break
+                if q['kind']=='lightning' and any(kind in kinds for kind in ('laser','mortar')) and not any(w and w['kind']=='laser' and w.get('charge',0)>0 for w in me['weapons']):
+                    act.update(take=q['id'],drop=next(i for i,w in enumerate(me['weapons']) if w and w['kind'] in ('laser','mortar'))); break
         origin=[p[0],p[1],p[2]+stats.get('muzzle_height',7.)]
-        available_arc=lightning if not self.lightning_rest and me['energy']>8 else None
         targets=[]
         if not recovering:
             for e in o['mechs']:
-                ep=target_point(origin,e,self.config,stats,available_arc)
-                if ep is None:
-                    continue
+                ep=e['pos'][:]; ep[2]+=4.5 if e['kind']=='mech' else 1.75
                 dd=distance(p,ep)
                 if dd<230 and self.arena.los(origin,ep):
                     score=dd+(30 if e['kind']=='npc' else 0)+e.get('hp',1000)*.025-(15 if e['id']==self.focus else 0)
                     targets.append((score,e,ep))
             if nd>80:
                 for c in o['crates']:
-                    cp=target_point(origin,c,self.config,stats,available_arc)
-                    if cp is None:
-                        continue
+                    cp=c['pos'][:];cp[2]+=2
                     if distance(p,cp)<110 and self.arena.los(origin,cp):
                         targets.append((distance(p,cp)-10,dict(c,vel=[0,0,0]),cp))
         if targets:
@@ -377,6 +396,23 @@ class Bot:
                                     aimpoint[2]-.5*self.config['mech'].get('gravity',22)*min(1.5,flight)**2)
             dx,dy,dz=[aimpoint[i]-origin[i] for i in range(3)]
             yaw,pitch=math.atan2(dy,dx),math.atan2(dz,math.hypot(dx,dy))
+            mortar=next((w for w in me['weapons'] if w and w['kind']=='mortar'),None)
+            mortar_aim=None
+            gun_finishes=gun and gun.get('ammo',0)>0 and gun.get('reload',0)<=0 and target.get('hp',1e9)<=gun['stats'].get('damage',45)*(1+self.config['cubes'].get('damage_per_cube',.04)*min(me['cubes'],self.config['cubes'].get('stat_cap',10)))
+            if mortar and not gun_finishes and mortar.get('cooldown',0)<=0 and 20<distance(p,ep)<170 and abs(vel[2])<.2:
+                ms=mortar['stats']
+                tube=[p[0],p[1],p[2]+height+.5]
+                offset=radius+.5
+                arcs=ballistic_solutions(tube,ep,vel,ms.get('speed',72),ms.get('gravity',22),offset,ms.get('ttl',7))
+                low=stats.get('min_pitch',self.config['mech'].get('min_pitch',-.7))
+                high=stats.get('max_pitch',self.config['mech'].get('max_pitch',1.3))
+                own_velocity=me.get('vel',[0,0,0])
+                mortar_aim=next((arc for arc in arcs if low<=arc[2]<=high and
+                    distance([p[j]+own_velocity[j]*arc[0] for j in range(2)],
+                             [ep[j]+vel[j]*arc[0] for j in range(2)])>ms.get('splash_radius',7)+radius+4 and
+                    self.arena.arc_clear(tube,arc,ms.get('speed',72),ms.get('gravity',22),offset)),None)
+                if mortar_aim:
+                    _,yaw,pitch=mortar_aim
             act['aim']=[yaw,pitch]
             tolerance=max(.012,math.atan2(2.8,distance(p,ep)))
             aligned=abs(angle(yaw,me['aim'][0]))<tolerance and abs(pitch-me['aim'][1])<tolerance+.01
@@ -384,8 +420,10 @@ class Bot:
                 if not w: continue
                 kind=w['kind']; ws=w['stats']; dd=distance(p,ep)
                 if kind=='gun':
-                    act['fire'][i]=bool(aligned and dd<ws.get('range',230))
+                    act['fire'][i]=bool(not mortar_aim and aligned and dd<ws.get('range',230))
                     if w.get('ammo',1)==0: act['reload']=True
+                elif kind=='mortar':
+                    act['fire'][i]=bool(mortar_aim and abs(angle(yaw,me['aim'][0]))<max(.008,math.atan2(2.,dd)) and abs(pitch-me['aim'][1])<.015)
                 elif kind=='laser':
                     charge=w.get('charge',0)
                     act['fire'][i]=bool(w.get('cooldown',0)<=0 and dd<ws.get('range',280) and (charge<ws.get('charge',.75)-.03 or not aligned))
