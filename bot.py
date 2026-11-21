@@ -186,12 +186,7 @@ class Bot:
                 goal=min(loot,key=lambda v:v[0])[1][:2]
             elif nearest and nd<100:
                 ex,ey=norm(p[0]-nearest['pos'][0],p[1]-nearest['pos'][1])
-                # Preserve placement while the field is crowded. Lightning is
-                # strongest after the field thins; closing into a full squad
-                # early exposes us to several house bots for one short-range arc.
-                late=o.get('alive',16)<=8
-                arc_push=lightning and not self.lightning_rest and hp>.55 and (late or nd<55)
-                desired=(lightning['stats'].get('range',45)*.78 if arc_push else (82 if not late else 75))
+                desired=(lightning['stats'].get('range',45)*.78 if lightning and not self.lightning_rest and hp>.36 else 75)
                 goal=[nearest['pos'][0]+ex*desired-ey*16*self.side,
                       nearest['pos'][1]+ey*desired+ex*16*self.side]
             elif not nearest or nd>115:
@@ -238,10 +233,14 @@ class Bot:
                     score-=max(0,radius+4-miss)*7
             if score>best[0]:
                 best=(score,vx,vy)
+        nearby=sum(distance(p,e['pos'])<85 for e in enemies)
+        # The practice opponents coordinate as a squad. Spend energy to break
+        # contact when several can focus us, while preserving the proven
+        # lightning closing behavior in ordinary one-on-one fights.
+        outnumbered=hp<.72 and nearby>=3 and me['energy']>35 and me['grounded']
         disengaging=hp<.45 and nd<100 and me['energy']>40 and me['grounded'] and not self.lightning_rest
-        closing=bool(lightning and not self.lightning_rest and hp>.55 and o.get('alive',16)<=8 and
-                     nd>lightning['stats'].get('range',45)+8 and nd<100 and me['energy']>60)
-        act={'tick':o['tick'],'move':[best[1],best[2]],'boost':bool((urgent and me['energy']>15) or disengaging or closing),
+        closing=bool(lightning and not self.lightning_rest and hp>.55 and nd>lightning['stats'].get('range',45)+8 and nd<100 and me['energy']>60)
+        act={'tick':o['tick'],'move':[best[1],best[2]],'boost':bool((urgent and me['energy']>15) or outnumbered or disengaging or closing),
              'jump':bool(self.stuck>.7 and me['grounded'] and me['energy']>35),
              'fire':[False,False]}
         if self.stuck>.8 and not me['grounded'] and me['energy']>15:
