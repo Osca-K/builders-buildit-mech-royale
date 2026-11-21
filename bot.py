@@ -133,7 +133,7 @@ class Arena:
 
 
 class Bot:
-    name='Aegis-14'
+    name='Aegis-15'
 
     def __init__(self,hello):
         self.config=hello['config']
@@ -265,6 +265,10 @@ class Bot:
         targets=[]
         if not recovering:
             for e in o['mechs']:
+                # NPC farming must not divert the torso away from a nearby
+                # hostile mech while its squad is applying combat pressure.
+                if e['kind']=='npc' and nd<85:
+                    continue
                 ep=e['pos'][:]; ep[2]+=4.5 if e['kind']=='mech' else 1.75
                 dd=distance(p,ep)
                 if dd<230 and self.arena.los(origin,ep):
